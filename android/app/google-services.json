@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "292161627006",
+    "project_id": "gepi-47831",
+    "storage_bucket": "gepi-47831.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:292161627006:android:831248d28be4b470b3c92f",
+        "android_client_info": {
+          "package_name": "com.domain.gepi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBWtpSrxfvLFpA-OWeP36yZ5jAbujoY288"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
