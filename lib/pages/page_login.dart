@@ -1,11 +1,14 @@
-import 'package:firebase_auth/firebase_auth.dart';
+
 import 'package:flutter/material.dart';
-import 'package:gepi/services/firebase/auth.dart';
-import 'package:gepi/pages/home_page.dart'; // NOUVEAUTÉ : Import de la page d'accueil
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:gepi/services/supabase/auth.dart';
+import 'package:gepi/pages/home_page.dart';
+import 'package:gepi/supabase_client.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.title});
   final String title;
+
   @override
   State<LoginPage> createState() => LoginPageState();
 }
@@ -20,7 +23,6 @@ class LoginPageState extends State<LoginPage> {
   bool forLogin = true;
   bool obscureText = true;
 
-  // NOUVEAUTÉ : Variables pour la gestion des rôles
   String? _selectedRole;
   final List<String> _roles = ['visiteur', 'technicien', 'super-admin'];
 
@@ -32,19 +34,56 @@ class LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
+  Future<void> _goHomeWithRole(String fallbackRole) async {
+    final sb = SB.client;
+    final user = sb.auth.currentUser;
+    String role = fallbackRole;
+
+    // 1) d’abord le rôle des metadata (immédiat, côté session)
+    final metaRole = user!.userMetadata?['role'] as String?;
+    if (metaRole != null && metaRole.isNotEmpty) {
+      role = metaRole;
+    }
+
+    // 2) on tente de lire la BD (plus fiable) avec quelques retries courts
+    if (user != null) {
+      final delaysMs = [0, 300, 800, 1500]; // total ~2.6s max
+      for (final d in delaysMs) {
+        if (d > 0) await Future.delayed(Duration(milliseconds: d));
+        try {
+          final row = await sb
+              .from('users')
+              .select('role')
+              .eq('id', user.id)
+              .maybeSingle();
+          final dbRole = row?['role'] as String?;
+          if (dbRole != null && dbRole.isNotEmpty) {
+            role = dbRole;
+            break;
+          }
+        } catch (_) {
+          // ignore et on retente
+        }
+      }
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => MyHomePage(title: "Page d'accueil", userRole: role),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Text(forLogin ? widget.title : "s'inscrire"),
-      ),
+      appBar: AppBar(title: Text(forLogin ? widget.title : "S'inscrire")),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Form(
           key: formKey,
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
               TextFormField(
                 controller: emailController,
@@ -53,13 +92,7 @@ class LoginPageState extends State<LoginPage> {
                   labelText: "Email",
                   border: OutlineInputBorder(),
                 ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Adresse e-mail requise';
-                  } else {
-                    return null;
-                  }
-                },
+                validator: (v) => (v == null || v.isEmpty) ? 'Adresse e-mail requise' : null,
               ),
               const SizedBox(height: 20),
               TextFormField(
@@ -70,22 +103,14 @@ class LoginPageState extends State<LoginPage> {
                   labelText: "Mot de passe",
                   border: const OutlineInputBorder(),
                   suffixIcon: IconButton(
-                    icon: Icon(
-                      obscureText ? Icons.visibility : Icons.visibility_off,
-                    ),
-                    onPressed: () {
-                      setState(() {
-                        obscureText = !obscureText;
-                      });
-                    },
+                    icon: Icon(obscureText ? Icons.visibility : Icons.visibility_off),
+                    onPressed: () => setState(() => obscureText = !obscureText),
                   ),
                 ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Mot de passe requis';
-                  } else {
-                    return null;
-                  }
+                validator: (v) {
+                  if (v == null || v.isEmpty) return 'Mot de passe requis';
+                  if (v.length < 6) return '6 caractères minimum';
+                  return null;
                 },
               ),
               const SizedBox(height: 20),
@@ -98,18 +123,13 @@ class LoginPageState extends State<LoginPage> {
                     labelText: "Confirmation du mot de passe",
                     border: OutlineInputBorder(),
                   ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'La confirmation du mot de passe est requise';
-                    } else if (value != passwordController.text) {
-                      return 'Les deux mots de passe ne correspondent pas!';
-                    } else {
-                      return null;
-                    }
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return 'Confirmation requise';
+                    if (v != passwordController.text) return 'Les mots de passe ne correspondent pas';
+                    return null;
                   },
                 ),
                 const SizedBox(height: 20),
-                // NOUVEAUTÉ : Le sélecteur de rôle
                 DropdownButtonFormField<String>(
                   decoration: const InputDecoration(
                     labelText: 'Rôle',
@@ -117,132 +137,102 @@ class LoginPageState extends State<LoginPage> {
                   ),
                   value: _selectedRole,
                   hint: const Text('Sélectionner un rôle'),
-                  onChanged: (String? newValue) {
-                    setState(() {
-                      _selectedRole = newValue;
-                    });
-                  },
-                  validator: (value) {
-                    if (value == null) {
-                      return 'Le rôle est requis';
-                    }
-                    return null;
-                  },
-                  items: _roles.map((String role) {
-                    return DropdownMenuItem<String>(
-                      value: role,
-                      child: Text(role),
-                    );
-                  }).toList(),
+                  onChanged: (s) => setState(() => _selectedRole = s),
+                  validator: (v) => (v == null) ? 'Le rôle est requis' : null,
+                  items: _roles.map((r) => DropdownMenuItem(value: r, child: Text(r))).toList(),
                 ),
               ],
               Container(
                 margin: const EdgeInsets.only(top: 30, bottom: 20),
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: isLoading ? null : () async {
-                    setState(() {
-                      isLoading = true;
-                    });
-                    if (formKey.currentState!.validate()) {
-                      try {
-                        if (forLogin) {
-                          // NOUVEAUTÉ : Récupération du rôle après la connexion
-                          final userData = await Auth().loginWithEmailAndPassword(
-                            emailController.text,
-                            passwordController.text,
-                          );
-                          if (userData != null) {
-                            Navigator.of(context).pushReplacement(
-  MaterialPageRoute(
-    builder: (context) => MyHomePage(
-      title: "Page d'accueil",
-      userRole: userData['role'],
-    ),
-  ),
-);
+                  onPressed: isLoading
+                      ? null
+                      : () async {
+                          setState(() => isLoading = true);
+                          if (!formKey.currentState!.validate()) {
+                            setState(() => isLoading = false);
+                            return;
+                          }
+                          try {
+                            if (forLogin) {
+                              // ====== Connexion ======
+                              final userData = await Auth().loginWithEmailAndPassword(
+                                emailController.text.trim(),
+                                passwordController.text,
+                              );
+                              if (!mounted) return;
+                              Navigator.of(context).pushReplacement(
+                                MaterialPageRoute(
+                                  builder: (_) => MyHomePage(
+                                    title: "Page d'accueil",
+                                    userRole: userData['role'] as String,
+                                  ),
+                                ),
+                              );
+                            } else {
+                              // ====== Inscription (sans confirmation e-mail) ======
+                              final role = _selectedRole!;
+                              await Auth().createUserWithEmailAndPassword(
+                                emailController.text.trim(),
+                                passwordController.text,
+                                role,
+                              );
 
+                              // On part tout de suite à l’accueil avec meta->role, puis BD dès prête.
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text("Compte créé et connecté."),
+                                  behavior: SnackBarBehavior.floating,
+                                  backgroundColor: Colors.green,
+                                  showCloseIcon: true,
+                                ),
+                              );
+
+                              await _goHomeWithRole(role);
+                            }
+                          } on AuthException catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(e.message),
+                                  behavior: SnackBarBehavior.floating,
+                                  backgroundColor: Colors.red,
+                                  showCloseIcon: true,
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text("Une erreur s'est produite : $e"),
+                                  behavior: SnackBarBehavior.floating,
+                                  backgroundColor: Colors.red,
+                                  showCloseIcon: true,
+                                ),
+                              );
+                            }
+                          } finally {
+                            if (mounted) setState(() => isLoading = false);
                           }
-                        } else {
-                          // NOUVEAUTÉ : Passer le rôle à la création de l'utilisateur
-                          if (_selectedRole != null) {
-                            await Auth().createUserWithEmailAndPassword(
-                              emailController.text,
-                              passwordController.text,
-                              _selectedRole!,
-                            );
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text("Inscription réussie, veuillez vous connecter."),
-                                behavior: SnackBarBehavior.floating,
-                                backgroundColor: Colors.green,
-                                showCloseIcon: true,
-                              ),
-                            );
-                            setState(() {
-                              forLogin = true;
-                              _selectedRole = null;
-                            });
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text("Veuillez sélectionner un rôle."),
-                                behavior: SnackBarBehavior.floating,
-                                backgroundColor: Colors.red,
-                                showCloseIcon: true,
-                              ),
-                            );
-                          }
-                        }
-                      } on FirebaseAuthException catch (e) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text("${e.message}"),
-                            behavior: SnackBarBehavior.floating,
-                            backgroundColor: Colors.red,
-                            showCloseIcon: true,
-                          ),
-                        );
-                      } catch (e) {
-                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text("Une erreur s'est produite : $e"),
-                            behavior: SnackBarBehavior.floating,
-                            backgroundColor: Colors.red,
-                            showCloseIcon: true,
-                          ),
-                        );
-                      } finally {
-                        setState(() {
-                          isLoading = false;
-                        });
-                      }
-                    } else {
-                      setState(() {
-                        isLoading = false;
-                      });
-                    }
-                  },
+                        },
                   child: isLoading
                       ? const CircularProgressIndicator()
-                      : Text(forLogin ? "se connecter" : "s'inscrire"),
+                      : Text(forLogin ? "Se connecter" : "S'inscrire"),
                 ),
               ),
-              SizedBox(
-                child: TextButton(
-                  onPressed: () {
-                    emailController.text = "";
-                    passwordController.text = "";
-                    passwordConfirmController.text = "";
-                    setState(() {
-                      forLogin = !forLogin;
-                    });
-                  },
-                  child: Text(
-                    forLogin
-                        ? "Je n'ai pas de compte s'inscrire"
-                        : "J'ai déjà un compte se connecter",
-                  ),
+              TextButton(
+                onPressed: () {
+                  emailController.clear();
+                  passwordController.clear();
+                  passwordConfirmController.clear();
+                  setState(() => forLogin = !forLogin);
+                },
+                child: Text(
+                  forLogin ? "Je n'ai pas de compte — s'inscrire"
+                           : "J'ai déjà un compte — se connecter",
                 ),
               ),
             ],

@@ -1,0 +1,9 @@
+{
+  "deno.enable": true,
+  "deno.enablePaths": ["supabase/functions"],
+  "deno.unstable": true,
+  "deno.suggest.imports.hosts": {
+    "jsr:": true,
+    "deno.land": true
+  }
+}

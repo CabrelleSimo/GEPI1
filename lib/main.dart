@@ -1,13 +1,30 @@
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
-import 'package:gepi/firebase_options.dart';
-//import 'package:gepi/pages/home_page.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:gepi/pages/redirection_page.dart';
+import 'package:gepi/supabase_client.dart';
+//import 'package:supabase_flutter/supabase_flutter.dart';
+//import 'package:gepi/pages/redirection_page.dart';
+
+Future<void> logoutAndGoHome(BuildContext context) async {
+  await Supabase.instance.client.auth.signOut();
+  if (context.mounted) {
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const RedirectionPage()),
+      (route) => false,
+    );
+  }
+}
+
+
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
+  await dotenv.load(fileName: ".env");
+  await Supabase.initialize(
+    url: SB.url,
+    anonKey: SB.anonKey,
+    realtimeClientOptions: const RealtimeClientOptions(eventsPerSecond: 10),
   );
   runApp(const MyApp());
 }
@@ -15,15 +32,14 @@ Future<void> main() async {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'GEPI',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-       
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        useMaterial3: true,
       ),
       home: const RedirectionPage(),
     );
