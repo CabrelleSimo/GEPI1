@@ -31,114 +31,125 @@ Deno.serve(async (req) => {
 
 */
 
-// supabase/functions/admin-create-user/index.ts
-// (Facultatif) Types pour l’auto-complétion dans l’éditeur
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+// Deno / Supabase Edge Function
+// deno-lint-ignore-file no-explicit-any
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-type Role = "visiteur" | "technicien" | "super-admin";
-type Payload =
-  | { action: "create"; email: string; password: string; role?: Role }
-  | { action: "update"; userId: string; password?: string; role?: Role }
-  | { action: "delete"; userId: string };
+const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+const serviceKey  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-const URL   = Deno.env.get("APP_SUPABASE_URL")!;
-const SROLE = Deno.env.get("SERVICE_ROLE_KEY")!; // clé service_role (SECRÈTE)
-
-// CORS permissif (appel direct depuis Flutter/web)
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Content-Type": "application/json",
-} as const;
-
-function json(data: unknown, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: CORS_HEADERS });
-}
-function isRole(v: unknown): v is Role {
-  return v === "visiteur" || v === "technicien" || v === "super-admin";
-}
-
-Deno.serve(async (req) => {
-  // Préflight CORS
+serve(async (req) => {
+  // CORS simple
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: CORS_HEADERS });
-  }
-  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
-
-  const admin = createClient(URL, SROLE);
-
-  // AuthN: l’appelant doit être super-admin
-  const auth = req.headers.get("Authorization") ?? "";
-  const jwt  = auth.replace(/^Bearer\s+/i, "");
-  if (!jwt) return json({ error: "Missing Authorization" }, 401);
-
-  const { data: me, error: meErr } = await admin.auth.getUser(jwt);
-  if (meErr || !me?.user) return json({ error: "Invalid or expired token" }, 401);
-
-  // Rôle depuis metadata puis fallback table public.users
-  let myRole: string | undefined = (me.user.user_metadata as any)?.role;
-  if (!myRole) {
-    const { data: row } = await admin.from("users").select("role").eq("id", me.user.id).maybeSingle();
-    myRole = row?.role;
-  }
-  if (myRole !== "super-admin") return json({ error: "forbidden" }, 403);
-
-  // Corps de requête
-  let body: Partial<Payload>;
-  try { body = await req.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
-  const action = body.action;
-  if (!action) return json({ error: "Missing action" }, 400);
-
-  // -------- Actions --------
-  if (action === "create") {
-    const email = (body.email ?? "").trim();
-    const password = (body.password ?? "").trim();
-    const role: Role = isRole(body.role) ? body.role! : "visiteur";
-    if (!email || !password) return json({ error: "email & password required" }, 400);
-
-    const { data: created, error: cErr } = await admin.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: { role },
-    });
-    if (cErr || !created?.user) return json({ error: cErr?.message ?? "createUser failed" }, 400);
-
-    await admin.from("users").upsert({ id: created.user.id, email, role });
-    return json({ ok: true, id: created.user.id, email, role });
+    return new Response(null, { headers: cors() });
   }
 
-  if (action === "update") {
-    const userId = (body.userId ?? "").trim();
-    if (!userId) return json({ error: "userId required" }, 400);
+  try {
+    const body = await req.json().catch(() => ({}));
+    const action: string = body?.action ?? "";
 
-    const updates: any = {};
-    if (body.password && body.password.trim()) updates.password = body.password.trim();
-    if (body.role) {
-      if (!isRole(body.role)) return json({ error: "invalid role" }, 400);
-      updates.user_metadata = { role: body.role };
+    // client pour lire le user appelant (avec son JWT)
+    const supabaseUserClient = createClient(
+      supabaseUrl,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } } },
+    );
+    const { data: me } = await supabaseUserClient.auth.getUser();
+    const meId = me?.user?.id;
+    if (!meId) return json({ error: "Unauthorized" }, 401);
+
+    // vérifier super-admin via la table applicative
+    const { data: meRow, error: roleErr } = await supabaseUserClient
+      .from("users").select("role").eq("id", meId).maybeSingle();
+    if (roleErr) return json({ error: roleErr.message }, 500);
+    if ((meRow?.role ?? "") !== "super-admin") {
+      return json({ error: "Forbidden (super-admin only)" }, 403);
     }
-    if (Object.keys(updates).length === 0) return json({ error: "nothing to update" }, 400);
 
-    const { error: uErr } = await admin.auth.admin.updateUserById(userId, updates);
-    if (uErr) return json({ error: uErr.message }, 400);
+    // client admin (service role) pour agir sur auth.users
+    const admin = createClient(supabaseUrl, serviceKey);
 
-    if (body.role) await admin.from("users").update({ role: body.role }).eq("id", userId);
-    return json({ ok: true });
+    if (action === "create") {
+      const email: string = body.email ?? "";
+      const password: string = body.password ?? "";
+      const role: string = body.role ?? "visiteur";
+      if (!email || !password) return json({ error: "email & password required" }, 400);
+
+      const { data: created, error } = await admin.auth.admin.createUser({
+        email, password, email_confirm: true, user_metadata: { role },
+      });
+      if (error) return json({ error: error.message }, 400);
+
+      const uid = created.user?.id;
+      if (!uid) return json({ error: "no user id returned" }, 500);
+
+      // sync table applicative
+      const { error: insErr } = await admin.from("users").insert({
+        id: uid, email, role,
+      });
+      if (insErr) return json({ error: insErr.message }, 400);
+
+      return json({ ok: true, id: uid });
+    }
+
+    if (action === "update") {
+      const userId: string = body.userId ?? "";
+      if (!userId) return json({ error: "userId required" }, 400);
+
+      const password: string | undefined = body.password;
+      const role: string | undefined = body.role;
+
+      // maj auth
+      if (password || role) {
+        const { error: upAuthErr } = await admin.auth.admin.updateUserById(userId, {
+          password: password,
+          user_metadata: role ? { role } : undefined,
+        });
+        if (upAuthErr) return json({ error: upAuthErr.message }, 400);
+      }
+
+      // maj table applicative
+      if (role) {
+        const { error: upTblErr } = await admin.from("users")
+          .update({ role }).eq("id", userId);
+        if (upTblErr) return json({ error: upTblErr.message }, 400);
+      }
+
+      return json({ ok: true });
+    }
+
+    if (action === "delete") {
+      const userId: string = body.userId ?? "";
+      if (!userId) return json({ error: "userId required" }, 400);
+
+      // ne pas permettre de se supprimer soi-même
+      if (userId === meId) return json({ error: "cannot delete self" }, 400);
+
+      const { error: delAuthErr } = await admin.auth.admin.deleteUser(userId);
+      if (delAuthErr) return json({ error: delAuthErr.message }, 400);
+
+      const { error: delTblErr } = await admin.from("users").delete().eq("id", userId);
+      if (delTblErr) return json({ error: delTblErr.message }, 400);
+
+      return json({ ok: true });
+    }
+
+    return json({ error: "Unknown action" }, 400);
+  } catch (e) {
+    return json({ error: e?.message ?? "Unexpected error" }, 500);
   }
+}, { onListen: () => console.log("admin-create-user running") });
 
-  if (action === "delete") {
-    const userId = (body.userId ?? "").trim();
-    if (!userId) return json({ error: "userId required" }, 400);
+function cors() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers":
+      "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
 
-    const { error: dErr } = await admin.auth.admin.deleteUser(userId);
-    if (dErr) return json({ error: dErr.message }, 400);
-
-    await admin.from("users").delete().eq("id", userId);
-    return json({ ok: true });
-  }
-
-  return json({ error: "Unknown action" }, 400);
-});
+function json(obj: any, status = 200) {
+  return new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json", ...cors() } });
+}

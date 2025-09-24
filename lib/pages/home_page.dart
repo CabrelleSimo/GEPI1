@@ -14,6 +14,7 @@ import 'package:gepi/pages/redirection_page.dart';
 import 'package:gepi/services/supabase/auth.dart';
 import 'package:gepi/supabase_client.dart';
 
+
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title, this.userRole});
 
@@ -90,6 +91,8 @@ class _MyHomePageState extends State<MyHomePage> {
     _etatsSub?.cancel();
     super.dispose();
   }
+  
+  
 
   // ======================== RÔLES ========================
 
@@ -246,6 +249,150 @@ class _MyHomePageState extends State<MyHomePage> {
       (route) => false,
     );
   }
+  Future<void> _openProfileDialog() async {
+  final user = _sb.auth.currentUser;
+  if (user == null) return;
+
+  final formKey = GlobalKey<FormState>();
+  final emailCtrl = TextEditingController(text: user.email ?? '');
+  final pwdCtrl   = TextEditingController();
+  final pwd2Ctrl  = TextEditingController();
+
+  String? infoMsg; // pour petits tips (ex: confirmation email)
+
+  await showDialog(
+    context: context,
+    builder: (ctx) {
+      return StatefulBuilder(builder: (ctx, setS) {
+        return AlertDialog(
+          title: const Text('Mon profil'),
+          content: SingleChildScrollView(
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: emailCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Email',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.email_outlined),
+                    ),
+                    validator: (v) =>
+                      (v == null || v.trim().isEmpty || !v.contains('@'))
+                        ? 'Email valide requis' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: pwdCtrl,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Nouveau mot de passe (optionnel)',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.lock_outline),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: pwd2Ctrl,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Confirmer le mot de passe',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.lock_outline),
+                    ),
+                    validator: (v) {
+                      if (pwdCtrl.text.trim().isEmpty) return null; // pas de changement
+                      if (v != pwdCtrl.text) return 'Les mots de passe ne correspondent pas';
+                      if (pwdCtrl.text.length < 6) return '6 caractères minimum';
+                      return null;
+                    },
+                  ),
+                  if (infoMsg != null) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        const Icon(Icons.info_outline, size: 18, color: Colors.blueGrey),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(infoMsg!, style: TextStyle(color: Colors.blueGrey.shade700))),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Fermer')),
+            ElevatedButton(
+              onPressed: () async {
+                if (!(formKey.currentState?.validate() ?? false)) return;
+
+                final newEmail = emailCtrl.text.trim();
+                final changePwd = pwdCtrl.text.trim().isNotEmpty;
+
+                try {
+                  // on peut tout envoyer en une seule fois
+                  final attrs = UserAttributes(
+                    email: (newEmail != user.email) ? newEmail : null,
+                    password: changePwd ? pwdCtrl.text : null,
+                  );
+
+                  if (attrs.email == null && attrs.password == null) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Aucune modification.')),
+                      );
+                    }
+                    return;
+                  }
+
+                  final res = await _sb.auth.updateUser(attrs);
+
+                  // Si email changé, Supabase peut envoyer un lien de confirmation
+                  if (attrs.email != null) {
+                    setS(() => infoMsg =
+                      "Un email de confirmation a pu vous être envoyé. "
+                      "Vous devrez peut-être vous reconnecter après validation.");
+                  }
+
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Profil mis à jour.')),
+                    );
+                  }
+
+                  // Si l’email a changé, on met à jour l’affichage de l’en-tête
+                  if (mounted) {
+                    setState(() => _userEmail = res.user?.email ?? newEmail);
+                  }
+
+                  if (!mounted) return;
+                  Navigator.pop(ctx);
+                } on AuthException catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(e.message), backgroundColor: Colors.red),
+                    );
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
+                    );
+                  }
+                }
+              },
+              child: const Text('Enregistrer'),
+            ),
+          ],
+        );
+      });
+    },
+  );
+}
+
 
   Widget _buildSideNav() {
     return Container(
@@ -378,7 +525,7 @@ class _MyHomePageState extends State<MyHomePage> {
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
                         ),
-                        onSelected: (value) async {
+                        /*onSelected: (value) async {
                           switch (value) {
                             case 'profile':
                               // TODO: ouvre ta page "Gestion des profils" ou un dialog
@@ -388,7 +535,18 @@ class _MyHomePageState extends State<MyHomePage> {
                               await _logoutAndGoHome();
                               break;
                           }
-                        },
+                        },*/
+                        onSelected: (value) async {
+  switch (value) {
+    case 'profile':
+      await _openProfileDialog(); // ← au lieu d’ouvrir “Gestion des profils”
+      break;
+    case 'logout':
+      await _logoutAndGoHome();
+      break;
+  }
+},
+
                         itemBuilder: (context) => const [
                           PopupMenuItem(
                             value: 'profile',

@@ -145,7 +145,7 @@ class _GestionAccesPageState extends State<GestionAccesPage> {
                   controller: _searchCtrl,
                   decoration: InputDecoration(
                     prefixIcon: const Icon(Icons.search),
-                    hintText: 'Rechercher (email, rôle, date...)',
+                    hintText: 'Rechercher',
                     border: const OutlineInputBorder(),
                     suffixIcon: IconButton(
                       icon: const Icon(Icons.clear),
