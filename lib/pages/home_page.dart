@@ -227,6 +227,7 @@ class _MyHomePageState extends State<MyHomePage> {
     {"title": "Statut", "icon": Icons.info},
     {"title": "Interventions", "icon": Icons.handyman},
     {"title": "Gestion des profils", "icon": Icons.manage_accounts},
+    {"title": "Lecteur code barre", "icon": Icons.qr_code_scanner},
   ];
 
   bool _isMenuEnabled(String title) {
@@ -604,6 +605,8 @@ class _MyHomePageState extends State<MyHomePage> {
         return const InterventionsPage();
       case 'Gestion des profils':
         return const GestionAccesPage();
+      case 'Lecteur code barre':
+        return _buildPlaceholder(_selectedPage);
       default:
         return _buildPlaceholder(_selectedPage);
     }
