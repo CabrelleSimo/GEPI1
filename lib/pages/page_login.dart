@@ -1,4 +1,254 @@
-/*
+import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:gepi/pages/home_page.dart';
+import 'package:gepi/supabase_client.dart';
+
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key, required this.title});
+  final String title;
+
+  @override
+  State<LoginPage> createState() => LoginPageState();
+}
+
+class LoginPageState extends State<LoginPage> {
+  final formKey = GlobalKey<FormState>();
+  final emailController = TextEditingController();
+  final passwordController = TextEditingController();
+  final passwordConfirmController = TextEditingController();
+
+  bool isLoading = false;
+  bool forLogin = true;
+  bool obscureText = true;
+
+  @override
+  void dispose() {
+    emailController.dispose();
+    passwordController.dispose();
+    passwordConfirmController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _goHomeWithRole(String fallbackRole) async {
+    final sb = SB.client;
+    final user = sb.auth.currentUser;
+    String role = fallbackRole;
+
+    // 1) rôle via metadata si déjà présent
+    final metaRole = user?.userMetadata?['role'] as String?;
+    if (metaRole != null && metaRole.isNotEmpty) {
+      role = metaRole;
+    }
+
+    // 2) essaie d’aller lire la BD (plus fiable)
+    if (user != null) {
+      final delaysMs = [0, 300, 800, 1500];
+      for (final d in delaysMs) {
+        if (d > 0) await Future.delayed(Duration(milliseconds: d));
+        try {
+          final row =
+              await sb.from('users').select('role').eq('id', user.id).maybeSingle();
+          final dbRole = row?['role'] as String?;
+          if (dbRole != null && dbRole.isNotEmpty) {
+            role = dbRole;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => MyHomePage(title: "Page d'accueil", userRole: role),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(forLogin ? widget.title : "S'inscrire")),
+      // ───────────── MODIF LAYOUT (taille + centrage) ─────────────
+      body: Center(
+        child: SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              // Ajuste la largeur du panneau ici (ex. 340–420)
+              maxWidth: 380,
+            ),
+            child: Card(
+              elevation: 8, // mets 0 si tu ne veux aucune ombre
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: Padding(
+                // marge interne du panneau
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+                // ───────────── TON FORM D’ORIGINE (inchangé) ─────────────
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      TextFormField(
+                        controller: emailController,
+                        decoration: const InputDecoration(
+                          prefixIcon: Icon(Icons.email),
+                          labelText: "Email",
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (v) =>
+                            (v == null || v.isEmpty) ? 'Adresse e-mail requise' : null,
+                      ),
+                      const SizedBox(height: 20),
+                      TextFormField(
+                        controller: passwordController,
+                        obscureText: obscureText,
+                        decoration: InputDecoration(
+                          prefixIcon: const Icon(Icons.lock),
+                          labelText: "Mot de passe",
+                          border: const OutlineInputBorder(),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              obscureText ? Icons.visibility : Icons.visibility_off,
+                            ),
+                            onPressed: () => setState(() => obscureText = !obscureText),
+                          ),
+                        ),
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return 'Mot de passe requis';
+                          if (v.length < 6) return '6 caractères minimum';
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 20),
+
+                      // En mode inscription : confirmation du mot de passe
+                      if (!forLogin) ...[
+                        TextFormField(
+                          controller: passwordConfirmController,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            prefixIcon: Icon(Icons.lock),
+                            labelText: "Confirmation du mot de passe",
+                            border: OutlineInputBorder(),
+                          ),
+                          validator: (v) {
+                            if (v == null || v.isEmpty) return 'Confirmation requise';
+                            if (v != passwordController.text) {
+                              return 'Les mots de passe ne correspondent pas';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+
+                      Container(
+                        margin: const EdgeInsets.only(top: 10, bottom: 12),
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: isLoading
+                              ? null
+                              : () async {
+                                  setState(() => isLoading = true);
+                                  if (!formKey.currentState!.validate()) {
+                                    setState(() => isLoading = false);
+                                    return;
+                                  }
+                                  try {
+                                    if (forLogin) {
+                                      // ====== Connexion ======
+                                      final res =
+                                          await SB.client.auth.signInWithPassword(
+                                        email: emailController.text.trim(),
+                                        password: passwordController.text,
+                                      );
+                                      if (res.session == null) {
+                                        throw const AuthException('Échec de connexion');
+                                      }
+                                      await _goHomeWithRole('visiteur'); // fallback
+                                    } else {
+                                      // ====== Inscription ======
+                                      final res = await SB.client.auth.signUp(
+                                        email: emailController.text.trim(),
+                                        password: passwordController.text,
+                                      );
+                                      if (res.session == null && res.user == null) {
+                                        throw const AuthException(
+                                            'Inscription échouée (vérifiez votre email).');
+                                      }
+                                      if (!mounted) return;
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text("Compte créé et connecté."),
+                                          behavior: SnackBarBehavior.floating,
+                                          backgroundColor: Colors.green,
+                                          showCloseIcon: true,
+                                        ),
+                                      );
+                                      await _goHomeWithRole('visiteur'); // fallback
+                                    }
+                                  } on AuthException catch (e) {
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text(e.message),
+                                          behavior: SnackBarBehavior.floating,
+                                          backgroundColor: Colors.red,
+                                          showCloseIcon: true,
+                                        ),
+                                      );
+                                    }
+                                  } catch (e) {
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text("Une erreur s'est produite : $e"),
+                                          behavior: SnackBarBehavior.floating,
+                                          backgroundColor: Colors.red,
+                                          showCloseIcon: true,
+                                        ),
+                                      );
+                                    }
+                                  } finally {
+                                    if (mounted) setState(() => isLoading = false);
+                                  }
+                                },
+                          child: isLoading
+                              ? const CircularProgressIndicator()
+                              : Text(forLogin ? "Se connecter" : "S'inscrire"),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          emailController.clear();
+                          passwordController.clear();
+                          passwordConfirmController.clear();
+                          setState(() => forLogin = !forLogin);
+                        },
+                        child: Text(
+                          forLogin
+                              ? "Je n'ai pas de compte — s'inscrire"
+                              : "J'ai déjà un compte — se connecter",
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+      // ───────────── FIN MODIF LAYOUT ─────────────
+    );
+  }
+}
+
+
+/*/*
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:gepi/services/supabase/auth.dart';
@@ -472,3 +722,4 @@ class LoginPageState extends State<LoginPage> {
     );
   }
 }
+*/

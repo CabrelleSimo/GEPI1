@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+/*import 'dart:typed_data';
 import 'package:intl/intl.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
@@ -86,6 +86,202 @@ class PdfExporter {
     await Printing.sharePdf(
       bytes: Uint8List.fromList(bytes),
       filename: '${_slug(title)}-${DateFormat('yyyyMMdd-HHmm').format(now)}.pdf',
+    );
+  }
+
+  static String _slug(String s) {
+    final lower = s.toLowerCase();
+    final cleaned = lower
+        .replaceAll(RegExp(r"[éèêë]"), 'e')
+        .replaceAll(RegExp(r"[àâ]"), 'a')
+        .replaceAll(RegExp(r"[îï]"), 'i')
+        .replaceAll(RegExp(r"[ôö]"), 'o')
+        .replaceAll(RegExp(r"[ûüù]"), 'u')
+        .replaceAll('ç', 'c')
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'-+'), '-');
+    return cleaned.replaceAll(RegExp(r'^-|-$'), '');
+  }
+}
+*/
+import 'dart:typed_data';
+import 'package:intl/intl.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:pdf/pdf.dart';
+import 'package:printing/printing.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+/// ===== Données d'une section (une "page" de ton app) à insérer dans le PDF global.
+class PdfSectionData {
+  final String title;                 // ex. "Équipements"
+  final List<String> headers;         // en-têtes du tableau
+  final List<List<String>> rows;      // lignes (déjà mappées en String)
+  final bool landscape;               // orientation souhaitée pour cette section
+  final String? subtitle;             // ex. "Filtre: Tous"
+
+  PdfSectionData({
+    required this.title,
+    required this.headers,
+    required this.rows,
+    this.landscape = false,
+    this.subtitle,
+  });
+}
+
+class PdfExporter {
+  // Police lisible + accents ; chargée via fonts par défaut de pdf
+  static pw.ThemeData _theme() {
+    return pw.ThemeData.withFont(
+      base: pw.Font.helvetica(),
+      bold: pw.Font.helveticaBold(),
+      italic: pw.Font.helveticaOblique(),
+      boldItalic: pw.Font.helveticaBoldOblique(),
+    );
+  }
+
+  static pw.PageTheme _pageTheme({bool landscape = false}) {
+    return pw.PageTheme(
+      orientation: landscape ? pw.PageOrientation.landscape : pw.PageOrientation.portrait,
+      margin: const pw.EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+      theme: _theme(),
+    );
+  }
+
+  /// ========== (1) Export d'UNE page (inchangé, tu peux garder ta version) ==========
+  static Future<void> exportDataTable({
+    required String title,
+    required List<String> headers,
+    required List<List<String>> rows,
+    bool landscape = false,
+    String? subtitle,
+  }) async {
+    final doc = pw.Document();
+    final now = DateTime.now();
+    final df = DateFormat('yyyy-MM-dd HH:mm');
+
+    doc.addPage(
+      pw.MultiPage(
+        pageTheme: _pageTheme(landscape: landscape),
+        header: (ctx) => _headerWidget(title: title, subtitle: subtitle),
+        footer: (ctx) => _footerWidget(now, df, ctx.pageNumber, ctx.pagesCount),
+        build: (context) => [
+          _dataTable(headers: headers, rows: rows),
+        ],
+      ),
+    );
+
+    final bytes = await doc.save();
+    await Printing.sharePdf(
+      bytes: Uint8List.fromList(bytes),
+      filename: '${_slug(title)}-${DateFormat('yyyyMMdd-HHmm').format(now)}.pdf',
+    );
+  }
+
+  /// ========== (2) Export GLOBAL : assemble plusieurs sections en un seul PDF ==========
+  static Future<void> exportAllPages({
+    required String globalTitle,               // ex. "Rapport GEPI - Export global"
+    required List<PdfSectionData> sections,
+    bool preferPrintDialogOnWeb = true,    
+  }) async {
+    final doc = pw.Document();
+    final now = DateTime.now();
+    final df = DateFormat('yyyy-MM-dd HH:mm');
+
+    // ---- Page de garde / sommaire simple
+    doc.addPage(
+      pw.Page(
+        pageTheme: _pageTheme(),
+        build: (context) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text(globalTitle,
+                  style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 8),
+              pw.Text('Généré le ${df.format(now)}',
+                  style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
+              pw.SizedBox(height: 18),
+              pw.Container(height: 1, color: PdfColors.grey300),
+              pw.SizedBox(height: 16),
+              pw.Text("Sommaire",
+                  style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 8),
+              ...List.generate(sections.length, (i) {
+                final s = sections[i];
+                return pw.Bullet(text: s.title);
+              }),
+            ],
+          );
+        },
+      ),
+    );
+    
+    // ---- Une section = un MultiPage (permet orientation propre à chaque section)
+    for (final s in sections) {
+      doc.addPage(
+        pw.MultiPage(
+          pageTheme: _pageTheme(landscape: s.landscape),
+          header: (ctx) => _headerWidget(title: s.title, subtitle: s.subtitle),
+          footer: (ctx) => _footerWidget(now, df, ctx.pageNumber, ctx.pagesCount),
+          build: (context) => [
+            _dataTable(headers: s.headers, rows: s.rows),
+          ],
+        ),
+      );
+    }
+
+    final bytes = await doc.save();
+    await Printing.sharePdf(
+      bytes: Uint8List.fromList(bytes),
+      filename:
+          '${_slug(globalTitle)}-${DateFormat('yyyyMMdd-HHmm').format(now)}.pdf',
+    );
+  }
+
+  // ===== widgets communs =====
+  static pw.Widget _headerWidget({required String title, String? subtitle}) {
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(title, style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+        if (subtitle != null) pw.SizedBox(height: 2),
+        if (subtitle != null) pw.Text(subtitle, style: const pw.TextStyle(fontSize: 10)),
+        pw.SizedBox(height: 6),
+        pw.Container(height: 1, color: PdfColors.grey300),
+      ],
+    );
+  }
+
+  static pw.Widget _footerWidget(
+    DateTime now,
+    DateFormat df,
+    int pageNumber,
+    int pagesCount,
+  ) {
+    return pw.Row(
+      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+      children: [
+        pw.Text('Généré le ${df.format(now)}', style: const pw.TextStyle(fontSize: 9)),
+        pw.Text('Page $pageNumber/$pagesCount', style: const pw.TextStyle(fontSize: 9)),
+      ],
+    );
+  }
+
+  static pw.Widget _dataTable({
+    required List<String> headers,
+    required List<List<String>> rows,
+  }) {
+    return pw.Table.fromTextArray(
+      headers: headers,
+      data: rows,
+      headerStyle:
+          pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+      headerDecoration: const pw.BoxDecoration(color: PdfColors.indigo),
+      cellAlignment: pw.Alignment.centerLeft,
+      cellStyle: const pw.TextStyle(fontSize: 9),
+      border: null,
+      cellHeight: 20,
+      headerAlignment: pw.Alignment.centerLeft,
     );
   }
 

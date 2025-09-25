@@ -24,7 +24,24 @@ class _EquipementsPageState extends State<EquipementsPage> {
   String? _filterEtatId;
 
   // ----- recherche historique -----
-  final _histSearchCtrl = TextEditingController();
+  //final _histSearchCtrl = TextEditingController();
+  final _histSearchCtrl = TextEditingController(); 
+String _histQuery = ''; // requête validée uniquement
+
+void _applyHistorySearch() {
+  setState(() {
+    _histQuery = _histSearchCtrl.text.trim().toLowerCase();
+  });
+}
+
+  /*final _histSearchCtrl = TextEditingController();
+String _histQuery = ''; // <- requête "validée"
+
+void _applyHistorySearch() {
+  setState(() {
+    _histQuery = _histSearchCtrl.text.trim();
+  });
+}*/
 
   // ----- référentiels -----
   List<Map<String, dynamic>> _etats = [];
@@ -85,7 +102,7 @@ Future<void> _exportEquipements(List<Map<String, dynamic>> rows) async {
 
   await PdfExporter.exportDataTable(
     title: 'Équipements',
-    subtitle: 'Export du tableau des actifs (filtres appliqués)',
+    subtitle: 'Tableau des actifs de Perenco Rio Del Rey',
     headers: headers,
     rows: data,
     landscape: true,
@@ -846,7 +863,8 @@ Future<void> _exportEquipements(List<Map<String, dynamic>> rows) async {
                 children: [
                   Padding(
                     padding: const EdgeInsets.all(16.0),
-                    child: TextField(
+                    
+                    child: /*TextField(
                       controller: _histSearchCtrl,
                       decoration: InputDecoration(
                         prefixIcon: const Icon(Icons.search),
@@ -858,7 +876,31 @@ Future<void> _exportEquipements(List<Map<String, dynamic>> rows) async {
                         ),
                       ),
                       onChanged: (_) => setState(() {}),
-                    ),
+                    ),*/
+                    TextField(
+  controller: _histSearchCtrl,
+  textInputAction: TextInputAction.search,   // Entrée = rechercher
+  onSubmitted: (_) => _applyHistorySearch(),// valider au clavier
+  decoration: InputDecoration(
+    prefixIcon: IconButton(                  // loupe cliquable
+      icon: const Icon(Icons.search),
+      onPressed: _applyHistorySearch,
+      tooltip: 'Rechercher',
+    ),
+    hintText: 'Rechercher',
+    border: const OutlineInputBorder(),
+    suffixIcon: IconButton(
+      icon: const Icon(Icons.clear),
+      onPressed: () {
+        _histSearchCtrl.clear();
+        _applyHistorySearch();               // reset filtre (ou mets _histQuery='' puis setState)
+      },
+      tooltip: 'Effacer',
+    ),
+  ),
+  // ❌ plus de onChanged ici
+),
+
                   ),
                   Expanded(
                     child: StreamBuilder<List<Map<String, dynamic>>>(
@@ -876,7 +918,9 @@ Future<void> _exportEquipements(List<Map<String, dynamic>> rows) async {
                         }
                         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 
-                        final q = _histSearchCtrl.text.trim().toLowerCase();
+                        //final q = _histSearchCtrl.text.trim().toLowerCase();
+                        final q = _histQuery; // on lit la requête VALIDÉE uniquement
+
                         final rows = snapshot.data!;
 
                         // Filtrage textuel large
@@ -1079,7 +1123,7 @@ Future<void> _exportEquipements(List<Map<String, dynamic>> rows) async {
                   ),
                 ),
               ),
-              const SizedBox(height: 1),
+              const SizedBox(height: 10),
               InkWell(
                 onTap: pick,
                 child: InputDecorator(
@@ -1087,7 +1131,7 @@ Future<void> _exportEquipements(List<Map<String, dynamic>> rows) async {
                     labelText: 'Date d’assignation',
                     border: OutlineInputBorder(),
                   ),
-                  child: Text(date == null ? '—' : _fmtDateOnly(date!.toIso8601String())),
+                  child: Text(date == null ? '—' : _fmtDateOnly(date!)),
                 ),
               ),
             ],
@@ -1389,6 +1433,12 @@ Future<void> _exportEquipements(List<Map<String, dynamic>> rows) async {
     final d = _parseTs(ts); if (d==null) return '—';
     return '${d.year}-${_2(d.month)}-${_2(d.day)}';
   }
+  /*String _fmtDateOnly(DateTime d) {
+  return "${d.day.toString().padLeft(2, '0')}/"
+         "${d.month.toString().padLeft(2, '0')}/"
+         "${d.year}";
+}
+*/
 
   static String _fmtTs(dynamic ts) {
     final d = _parseTs(ts); if (d==null) return '—';

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:gepi/pages/gepi_repository.dart';
+import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:gepi/pages/redirection_page.dart';
 import 'package:gepi/supabase_client.dart';
+//import 'my_app.dart';
 //import 'package:supabase_flutter/supabase_flutter.dart';
 //import 'package:gepi/pages/redirection_page.dart';
 
@@ -26,7 +29,11 @@ Future<void> main() async {
     anonKey: SB.anonKey,
     realtimeClientOptions: const RealtimeClientOptions(eventsPerSecond: 10),
   );
-  runApp(const MyApp());
+  Provider<GepiRepository>(
+      create: (_) => GepiRepository(),
+      child: const MyApp(), 
+    );
+    runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {

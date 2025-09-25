@@ -1,7 +1,8 @@
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:gepi/pages/gestion_acces_page.dart';
+import 'package:gepi/pages/pdf_exporter.dart';
+import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:gepi/pages/equipements_page.dart';
@@ -13,6 +14,9 @@ import 'package:gepi/pages/emplacement_page.dart';
 import 'package:gepi/pages/redirection_page.dart';
 import 'package:gepi/services/supabase/auth.dart';
 import 'package:gepi/supabase_client.dart';
+import 'package:gepi/pages/pdf_exporter.dart';
+import 'package:gepi/pages/gepi_repository.dart';
+import 'package:provider/provider.dart';
 
 
 class MyHomePage extends StatefulWidget {
@@ -71,6 +75,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
     // 3) confirme côté BD
     _fetchUserRole();
+    // ex. avec Provider
+
+
 
     // Écoute des changements d’auth
     _authSub = _sb.auth.onAuthStateChange.listen((_) async {
@@ -95,6 +102,372 @@ class _MyHomePageState extends State<MyHomePage> {
   
 
   // ======================== RÔLES ========================
+  // Dans ton widget (State), ajoute un flag si tu veux désactiver le bouton pendant l’export
+bool _exportingAll = false;
+
+Future<void> _onDownloadAllPressed(BuildContext context) async {
+  if (_exportingAll) return;
+  setState(() => _exportingAll = true);
+
+  // Petit modal de progression pour éviter l’impression de “freeze”
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => WillPopScope(
+      onWillPop: () async => false,
+      child: const Dialog(
+        insetPadding: EdgeInsets.all(24),
+        child: Padding(
+          padding: EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 14),
+              Text('Préparation du PDF…'),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  try {
+    // 1) Charger les données en parallèle (remplace par tes vraies sources)
+    final repo = context.read<GepiRepository>();
+    final results = await Future.wait([
+      
+      repo.fetchEquipements(),
+      repo.fetchMaintenance(),
+      repo.fetchHse(),
+      repo.fetchFournisseurs(),
+      repo.fetchEmplacements(),
+      repo.fetchStatuts(),
+      repo.fetchInterventions(),
+      repo.fetchUsersOrProfiles(),
+    ]).timeout(const Duration(seconds: 60)); // anti-blocage réseau
+
+    final equipementsItems    = results[0] as List<Map<String, dynamic>>;
+    final maintenanceItems    = results[1] as List<Map<String, dynamic>>;
+    final hseItems            = results[2] as List<Map<String, dynamic>>;
+    final fournisseursItems   = results[3] as List<Map<String, dynamic>>;
+    final emplacementsItems   = results[4] as List<Map<String, dynamic>>;
+    final statutsItems        = results[5] as List<Map<String, dynamic>>;
+    final interventionsItems  = results[6] as List<Map<String, dynamic>>;
+    final profilsItems        = results[7] as List<Map<String, dynamic>>;
+
+    // 2) Construire les sections
+    final sections = [
+      buildEquipementsSection(items: equipementsItems,   subtitle: 'Tous'),
+      buildMaintenanceSection(items: maintenanceItems,   subtitle: 'Tous'),
+      buildHseSection(items: hseItems,                   subtitle: 'Tous'),
+      buildFournisseursSection(items: fournisseursItems, subtitle: 'Tous'),
+      buildEmplacementsSection(items: emplacementsItems, subtitle: 'Tous'),
+      buildStatutsSection(items: statutsItems,           subtitle: 'Tous'),
+      buildInterventionsSection(items: interventionsItems, subtitle: 'Tous'),
+      buildProfilsSection(items: profilsItems,           subtitle: 'Tous'),
+    ];
+
+    // 3) Fermer le modal AVANT d’ouvrir la boîte de dialogue navigateur
+    if (context.mounted) Navigator.of(context).pop();
+
+    // 4) Lancer l’export (layoutPdf sur Web pour éviter le blocage)
+    await PdfExporter.exportAllPages(
+      globalTitle: 'Rapport GEPI - Export global',
+      sections: sections,
+      preferPrintDialogOnWeb: true,
+    );
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Export terminé.')),
+      );
+    }
+  } catch (e) {
+    if (context.mounted) {
+      Navigator.of(context).pop(); // fermer le modal si ouvert
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export échoué : $e')),
+      );
+    }
+  } finally {
+    if (mounted) setState(() => _exportingAll = false);
+  }
+}
+//stop
+  // Utils de mise en forme (tu peux les mettre près de PdfExporter)
+String _fmtDate(dynamic d) {
+  if (d == null) return '';
+  // Support DateTime, String (ISO) ou int (epoch)
+  if (d is DateTime) return DateFormat('yyyy-MM-dd').format(d);
+  if (d is int) return DateFormat('yyyy-MM-dd')
+      .format(DateTime.fromMillisecondsSinceEpoch(d));
+  // string
+  return d.toString().split('T').first;
+}
+String _s(dynamic v) => v == null ? '' : v.toString();
+
+/// =============== ÉQUIPEMENTS (déjà vu en exemple, je le laisse au complet)
+PdfSectionData buildEquipementsSection({
+  required List<Map<String, dynamic>> items,
+  String? subtitle,
+}) {
+  final headers = [
+    'État','N° série','Modèle','Marque','Host name','Type','Statut',
+    'Emplacement','Date achat','Attribué à','Dernière modif',
+  ];
+
+  final rows = items.map((e) => [
+    _s(e['etat']),
+    _s(e['numero_serie'] ?? e['num_serie'] ?? e['serial']),
+    _s(e['modele'] ?? e['model']),
+    _s(e['marque'] ?? e['brand']),
+    _s(e['hostname'] ?? e['host_name']),
+    _s(e['type']),
+    _s(e['statut']),
+    _s(e['emplacement'] ?? e['location']),
+    _fmtDate(e['date_achat'] ?? e['purchase_date']),
+    _s(e['attribue_a'] ?? e['assigned_to']),
+    _fmtDate(e['updated_at']),
+  ]).toList();
+
+  return PdfSectionData(
+    title: 'Équipements',
+    headers: headers,
+    rows: rows,
+    subtitle: subtitle,
+    landscape: true,
+  );
+}
+
+/// =============== MAINTENANCE
+PdfSectionData buildMaintenanceSection({
+  required List<Map<String, dynamic>> items,
+  String? subtitle,
+}) {
+  final headers = [
+    'Réf', 'Équipement', 'Type', 'Priorité', 'Statut',
+    'Ouverture', 'Échéance', 'Technicien', 'Coût',
+  ];
+  final rows = items.map((m) => [
+    _s(m['ref'] ?? m['code'] ?? m['id']),
+    _s(m['equipement'] ?? m['asset'] ?? m['asset_name']),
+    _s(m['type'] ?? m['maintenance_type']),
+    _s(m['priorite'] ?? m['priority']),
+    _s(m['statut'] ?? m['status']),
+    _fmtDate(m['date_ouverture'] ?? m['opened_at'] ?? m['created_at']),
+    _fmtDate(m['echeance'] ?? m['due_date']),
+    _s(m['technicien'] ?? m['assigne_a'] ?? m['assignee']),
+    _s(m['cout'] ?? m['cost']),
+  ]).toList();
+
+  return PdfSectionData(
+    title: 'Maintenance',
+    headers: headers,
+    rows: rows,
+    subtitle: subtitle,
+    landscape: false,
+  );
+}
+
+/// =============== HSE (Hygiène, Sécurité, Environnement)
+PdfSectionData buildHseSection({
+  required List<Map<String, dynamic>> items,
+  String? subtitle,
+}) {
+  final headers = [
+    'N°', 'Type', 'Gravité', 'Statut', 'Site/Zone',
+    'Déclaré le', 'Clôturé le', 'Responsable',
+  ];
+  final rows = items.map((h) => [
+    _s(h['numero'] ?? h['id']),
+    _s(h['type']),
+    _s(h['gravite'] ?? h['severity']),
+    _s(h['statut'] ?? h['status']),
+    _s(h['zone'] ?? h['site'] ?? h['emplacement']),
+    _fmtDate(h['date_declaration'] ?? h['declared_at'] ?? h['created_at']),
+    _fmtDate(h['date_cloture'] ?? h['closed_at']),
+    _s(h['responsable'] ?? h['assignee']),
+  ]).toList();
+
+  return PdfSectionData(
+    title: 'HSE',
+    headers: headers,
+    rows: rows,
+    subtitle: subtitle,
+  );
+}
+
+/// =============== FOURNISSEURS
+PdfSectionData buildFournisseursSection({
+  required List<Map<String, dynamic>> items,
+  String? subtitle,
+}) {
+  final headers = [
+    'Nom', 'Catégorie', 'Contact', 'Email', 'Téléphone', 'Adresse', 'Pays',
+    'Dernière commande',
+  ];
+  final rows = items.map((f) => [
+    _s(f['nom'] ?? f['name']),
+    _s(f['categorie'] ?? f['category']),
+    _s(f['contact'] ?? f['contact_name']),
+    _s(f['email']),
+    _s(f['telephone'] ?? f['phone']),
+    _s(f['adresse'] ?? f['address']),
+    _s(f['pays'] ?? f['country']),
+    _fmtDate(f['last_order_at'] ?? f['derniere_commande']),
+  ]).toList();
+
+  return PdfSectionData(
+    title: 'Fournisseurs',
+    headers: headers,
+    rows: rows,
+    subtitle: subtitle,
+  );
+}
+
+/// =============== EMPLACEMENTS
+PdfSectionData buildEmplacementsSection({
+  required List<Map<String, dynamic>> items,
+  String? subtitle,
+}) {
+  final headers = [
+    'Code', 'Nom', 'Site', 'Bâtiment', 'Étage', 'Salle', 'Capacité', 'Responsable',
+  ];
+  final rows = items.map((l) => [
+    _s(l['code']),
+    _s(l['nom'] ?? l['name']),
+    _s(l['site']),
+    _s(l['batiment'] ?? l['building']),
+    _s(l['etage'] ?? l['floor']),
+    _s(l['salle'] ?? l['room']),
+    _s(l['capacite'] ?? l['capacity']),
+    _s(l['responsable'] ?? l['manager']),
+  ]).toList();
+
+  return PdfSectionData(
+    title: 'Emplacements',
+    headers: headers,
+    rows: rows,
+    subtitle: subtitle,
+  );
+}
+
+/// =============== STATUTS (catalogue des statuts d’équipements/interventions)
+PdfSectionData buildStatutsSection({
+  required List<Map<String, dynamic>> items,
+  String? subtitle,
+}) {
+  final headers = ['Code', 'Libellé', 'Description', 'Actif', 'Dernière modif'];
+  final rows = items.map((s) => [
+    _s(s['code']),
+    _s(s['libelle'] ?? s['label'] ?? s['name']),
+    _s(s['description'] ?? s['desc']),
+    _s((s['actif'] ?? s['active']) == true ? 'Oui' : 'Non'),
+    _fmtDate(s['updated_at']),
+  ]).toList();
+
+  return PdfSectionData(
+    title: 'Statuts',
+    headers: headers,
+    rows: rows,
+    subtitle: subtitle,
+  );
+}
+
+/// =============== INTERVENTIONS (tickets / ordres de travail)
+PdfSectionData buildInterventionsSection({
+  required List<Map<String, dynamic>> items,
+  String? subtitle,
+}) {
+  final headers = [
+    'N°', 'Équipement', 'Type', 'Priorité', 'Statut',
+    'Ouverture', 'Début', 'Fin', 'Durée (h)', 'Technicien',
+  ];
+  final rows = items.map((t) {
+    final start = t['date_debut'] ?? t['start_at'];
+    final end   = t['date_fin'] ?? t['end_at'];
+    double? hours;
+    try {
+      if (start != null && end != null) {
+        final s = start is DateTime ? start : DateTime.parse(start.toString());
+        final e = end   is DateTime ? end   : DateTime.parse(end.toString());
+        hours = e.difference(s).inMinutes / 60.0;
+      }
+    } catch (_) {}
+    return [
+      _s(t['numero'] ?? t['id']),
+      _s(t['equipement'] ?? t['asset']),
+      _s(t['type']),
+      _s(t['priorite'] ?? t['priority']),
+      _s(t['statut'] ?? t['status']),
+      _fmtDate(t['created_at'] ?? t['ouverture']),
+      _fmtDate(start),
+      _fmtDate(end),
+      hours == null ? '' : hours.toStringAsFixed(2),
+      _s(t['technicien'] ?? t['assignee']),
+    ];
+  }).toList();
+
+  return PdfSectionData(
+    title: 'Interventions',
+    headers: headers,
+    rows: rows,
+    subtitle: subtitle,
+    landscape: true,
+  );
+}
+
+/// =============== GESTION DES PROFILS / UTILISATEURS
+PdfSectionData buildProfilsSection({
+  required List<Map<String, dynamic>> items,
+  String? subtitle,
+}) {
+  final headers = [
+    'Nom', 'Email', 'Rôle', 'Actif', 'Dernière connexion', 'Créé le',
+  ];
+  final rows = items.map((u) => [
+    _s(u['nom'] ?? u['name']),
+    _s(u['email']),
+    _s(u['role']),
+    _s((u['actif'] ?? u['active'] ?? u['is_active']) == true ? 'Oui' : 'Non'),
+    _fmtDate(u['last_sign_in_at'] ?? u['derniere_connexion']),
+    _fmtDate(u['created_at']),
+  ]).toList();
+
+  return PdfSectionData(
+    title: 'Gestion des profils',
+    headers: headers,
+    rows: rows,
+    subtitle: subtitle,
+  );
+}
+
+  /*Future<PdfSectionData> _buildEquipementsSection() async {
+  // Récupère tes données (depuis Supabase ou provider)
+  // final items = await repo.fetchEquipements(...);
+
+  final headers = [
+    'État', 'N° série', 'Modèle', 'Marque', 'Host name', 'Type', 'Statut',
+    'Emplacement', 'Date achat', 'Attribué à', 'Dernière modif',
+  ];
+
+  final rows = <List<String>>[
+    // items.map((e) => [
+    //   e.etat, e.numeroSerie, e.modele, e.marque, e.host, e.type, e.statut,
+    //   e.emplacement, fmt(e.dateAchat), e.attribueA, fmt(e.updatedAt),
+    // ]).toList();
+  ];
+
+  return PdfSectionData(
+    title: 'Équipements',
+    subtitle: 'Tous', // ou ton filtre actif
+    headers: headers,
+    rows: rows,
+    landscape: true,  // utile pour les tableaux larges
+  );
+}*/
+
 
   Future<void> _fetchUserRole() async {
     setState(() => _loadingRole = true);
@@ -450,7 +823,7 @@ class _MyHomePageState extends State<MyHomePage> {
               itemCount: _menuItems.length,
             ),
           ),
-          // (Tu as demandé d’enlever “Se déconnecter” du menu latéral — on ne l’affiche plus ici)
+          
         ],
       ),
     );
@@ -490,13 +863,100 @@ class _MyHomePageState extends State<MyHomePage> {
                   Row(
                     children: [
                       // Icône “télécharger” conservée (sans action pour l’instant)
-                      IconButton(
+                      /*IconButton(
                         icon: Icon(Icons.download, color: Colors.blue.shade700),
                         tooltip: 'Exporter (bientôt)',
                         onPressed: () {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text('Fonction export à venir.'),
+                            ),
+                          );
+                        },
+                      ),*/
+                      ElevatedButton.icon(
+                        onPressed: () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Télécharger toutes les pages à implémenter'),
+                            ),
+                          );
+                        },
+  //onPressed: _exportingAll ? null : () => _onDownloadAllPressed(context),
+  icon: const Icon(Icons.download),
+  label: const Text('Télécharger tout'),
+  style: ElevatedButton.styleFrom(
+    backgroundColor: Colors.blue.shade700,
+  ),
+),
+
+                      /*IconButton(
+  tooltip: 'Télécharger toutes les pages',
+  onPressed: () async {
+  final repo = context.read<GepiRepository>();
+    // 1) Récupère / dispose des données de CHAQUE page
+final equipementsItems    = await repo.fetchEquipements();     // List<Map<String,dynamic>>
+final maintenanceItems    = await repo.fetchMaintenance();
+final hseItems            = await repo.fetchHse();
+final fournisseursItems   = await repo.fetchFournisseurs();
+final emplacementsItems   = await repo.fetchEmplacements();
+final statutsItems        = await repo.fetchStatuts();
+final interventionsItems  = await repo.fetchInterventions();
+final profilsItems        = await repo.fetchUsersOrProfiles();
+
+// 2) Construit les sections PDF (appel correct des builders)
+final equipements   = buildEquipementsSection(items: equipementsItems, subtitle: 'Tous');
+final maintenance   = buildMaintenanceSection(items: maintenanceItems, subtitle: 'Tous');
+final hse           = buildHseSection(items: hseItems, subtitle: 'Tous');
+final fournisseurs  = buildFournisseursSection(items: fournisseursItems, subtitle: 'Tous');
+final emplacements  = buildEmplacementsSection(items: emplacementsItems, subtitle: 'Tous');
+final statuts       = buildStatutsSection(items: statutsItems, subtitle: 'Tous');
+final interventions = buildInterventionsSection(items: interventionsItems, subtitle: 'Tous');
+final profils       = buildProfilsSection(items: profilsItems, subtitle: 'Tous');
+
+// 3) Export global
+await PdfExporter.exportAllPages(
+  globalTitle: 'Rapport GEPI',
+  sections: [
+    equipements,
+    maintenance,
+    hse,
+    fournisseurs,
+    emplacements,
+    statuts,
+    interventions,
+    profils,
+  ],
+);
+
+    // ... ajoute les autres sections si besoin
+    
+
+    // 2) Appel unique qui assemble tout dans un seul PDF
+    await PdfExporter.exportAllPages(
+      globalTitle: 'Rapport GEPI - Export global',
+      sections: [
+        equipements,
+        maintenance,
+        hse,
+        fournisseurs,
+        emplacements,
+        statuts,
+        interventions,
+        profils,
+      ],
+    );
+  },
+  icon: const Icon(Icons.download, color: Colors.blue),
+),*/
+
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: Icon(Icons.notifications),
+                        onPressed: () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Fonction notifications à venir.'),
                             ),
                           );
                         },
